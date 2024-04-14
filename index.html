@@ -1,0 +1,973 @@
+<html>
+    <head>
+        <title>Summoner's skirmish</title>
+    </head>
+    <body>
+        <canvas id='cvs'></canvas>
+        <script>
+            const cvs = document.getElementById('cvs');
+            const ctx = cvs.getContext('2d');
+
+            let cw = window.innerWidth;
+            let ch = window.innerHeight;
+
+            let frame = 0;
+
+            cvs.width = cw;
+            cvs.height = ch;
+            cvs.style.border = '1px solid black';
+
+            cvs.style.position = 'absolute';
+            cvs.x = 0;
+            cvs.y = 0;
+
+            document.body.style.margin = 0;
+            document.body.style.padding = 0;
+
+            let pl = {
+                x: 100,
+                y: 100,
+                r: 15,
+                hp: 100,
+                maxHp: 100
+            }
+
+            let img = {};
+            let names = ['blueSlime', 'poisonSlime', 'splitterSlime', 'energyCharge', 'slimeBall', 'poisonZone', 'baseGuardian', 'poisonGuardian', 'deleteDiv', 'rageGuardian', 'bounceGuardian', 'enlargeGuardian'];
+            let loaded = 0;
+
+            names.forEach(x=>{
+                img[x] = new Image();
+                img[x].src = `./${x}.png`;
+                img[x].onload = ()=>{
+                    loaded++;
+                    if (loaded >= names.length) {
+                        animate();
+                    }
+                }
+            })
+
+            let divs = ['baseGuardian', 'poisonGuardian', 'rageGuardian', 'bounceGuardian', 'enlargeGuardian'];
+            let divPros = ['Increases your bullet speed', 'Remove one blob of poison every 4 seconds', 'Halve the shooting cooldown', 'Your casts ricochet once on the wall', 'Your bullets are larger'];
+            let divCons = ['Decreases your bullet size', 'Create a toxic circle around itself', 'A third of the bullets miss on impact (no damage dealt)', 'You take 5 points of damage from your own bullets, after the bounce', 'YOU are larger'];
+
+            // let placedDivs = [{x: 400, y: 400, type: 'poisonGuardian'}];
+            // let placedDivsName = ['poisonGuardian'];
+
+            let placedDivs = [];
+            let placedDivsName = [];
+
+            const divSize = 40;
+
+            let rareChance = 10;
+            let spawnTimer = 180;
+            let spawnTimerReset = 180;
+
+            class Bullet {
+                constructor(x, y, r, vx, vy, hostile, dmg, sprite, boss) {
+                    this.x = x;
+                    this.y = y;
+                    this.r = r;
+                    this.vx = vx;
+                    this.vy = vy;
+                    this.needDel = false;
+                    this.hostile = hostile;
+                    this.dmg = dmg;
+                    this.sprite = sprite;
+                    this.bounced = false;
+                    this.canDmgPlayer = true;
+                    this.broken = false;
+                    this.boss = boss;
+                    this.bounceCount = 0;
+                }
+                render() {
+                    // ctx.fillStyle = this.hostile ? 'green' : 'red';
+                    // ctx.beginPath();
+                    // ctx.arc(this.x, this.y, this.r, 0, 2*Math.PI);
+                    // ctx.fill();
+                    // ctx.closePath();
+                    ctx.drawImage(img[this.sprite], 0, 0, 32, 32, this.x-this.r, this.y-this.r, this.r*2, this.r*2);
+                }
+                tick() {
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    if (this.x <= this.r || this.x >= cw - this.r || this.y <= this.r || this.y >= ch - this.r) {
+                        if (!this.hostile && placedDivsName.includes('bounceGuardian') && !this.bounced) {
+                            if (this.x <= this.r || this.x >= cw - this.r) this.vx = -this.vx;
+                            if (this.y <= this.r || this.y >= ch - this.r) this.vy = -this.vy;
+                            this.bounced = true;
+                        }
+                        else if (this.boss && this.bounceCount < 2) {
+                            if (this.x <= this.r || this.x >= cw - this.r) this.vx = -this.vx;
+                            if (this.y <= this.r || this.y >= ch - this.r) this.vy = -this.vy;
+
+                            this.bounceCount++;
+                        }
+                        else {
+                            this.needDel = true;
+                        }
+
+                    }
+
+                    if (this.hostile) {
+                        if (collision(this, pl)) {
+                            this.needDel = true;
+                            // console.log('hit');
+                            pl.hp -= this.dmg;
+                            if (pl.hp <= 0) {
+                                console.log('death')
+                            }
+                        }
+                    }
+                    else {
+                        entities.forEach(x=>{
+                            if (!this.hostile && placedDivsName.includes('bounceGuardian') && collision(this, pl) && this.bounced && this.canDmgPlayer) {
+                                pl.hp -= 5;
+                                this.canDmgPlayer = false;
+                                this.needDel = true;
+                            }
+                            else if (collision(this,x) && x.isEnemy) {
+                                if ((!placedDivsName.includes('rageGuardian')) || Math.random() > 0.3) {
+                                    x.hit(this);
+                                    // this.needDel = true;
+                                }
+                                this.needDel = true;
+                            }
+                        })
+                    }
+                }
+            }
+
+            class MovingEnemy { 
+                constructor(x, y) {
+                    this.x = x;
+                    this.y = y;
+                    this.r = 30;
+                    this.dest = {x: 0, y: 0};
+                    this.spd = 2 + Math.random() * 2;
+                    this.decideDest();
+                    this.frame = 0;
+                    this.needDel = false;
+                    this.bulletSpd = 2;
+                    this.isEnemy = true;
+                }
+                decideDest() {
+                    this.dest.x = Math.random() * (cw - this.r * 2) + this.r;
+                    this.dest.y = Math.random() * (ch - this.r * 2) + this.r;
+                }
+                tick() {
+                    this.frame++;
+                    if (Math.hypot(this.x - this.dest.x, this.y - this.dest.y) < 5) {
+                        this.decideDest();
+                    }
+                    let dx = this.dest.x - this.x;
+                    let dy = this.dest.y - this.y;
+                    let dis = Math.hypot(dx, dy);
+
+                    this.x += dx/dis * this.spd;
+                    this.y += dy/dis * this.spd;
+
+                    if (this.frame % 120 === 0) {
+                        let dx = pl.x - this.x;
+                        let dy = pl.y - this.y;
+                        let dis = Math.hypot(dx, dy);
+
+                        entities.push(new Bullet(this.x, this.y, 10, dx/dis * this.bulletSpd, dy/dis * this.bulletSpd, true, 5, 'slimeBall'));
+                    }
+                }
+                render() {
+                    // ctx.fillStyle = 'red';
+                    // ctx.beginPath();
+                    // ctx.arc(this.x, this.y, this.r, 0, 2*Math.PI);
+                    // ctx.fill();
+                    // ctx.closePath();
+                    ctx.drawImage(img.blueSlime, 0, 0, 32, 32, this.x-this.r, this.y-this.r, this.r*2, this.r*2);
+                }
+                hit() {
+                    this.needDel = true;
+                    spawnTimer -= 20;
+
+                    killCount ++;
+                }
+            }
+
+            class SmallEnemy { 
+                constructor(x, y) {
+                    this.x = x;
+                    this.y = y;
+                    this.r = 20;
+                    this.dest = {x: 0, y: 0};
+                    this.spd = 4 + Math.random() * 2;
+                    this.decideDest();
+                    this.frame = 0;
+                    this.needDel = false;
+                    this.bulletSpd = 2;
+                    this.isEnemy = true;
+                }
+                decideDest() {
+                    this.dest.x = Math.random() * (cw - this.r * 2) + this.r;
+                    this.dest.y = Math.random() * (ch - this.r * 2) + this.r;
+                }
+                tick() {
+                    this.frame++;
+                    if (Math.hypot(this.x - this.dest.x, this.y - this.dest.y) < 5) {
+                        this.decideDest();
+                    }
+                    let dx = this.dest.x - this.x;
+                    let dy = this.dest.y - this.y;
+                    let dis = Math.hypot(dx, dy);
+
+                    this.x += dx/dis * this.spd;
+                    this.y += dy/dis * this.spd;
+
+                    if (this.frame % 120 === 0) {
+                        let dx = pl.x - this.x;
+                        let dy = pl.y - this.y;
+                        let dis = Math.hypot(dx, dy);
+
+                        entities.push(new Bullet(this.x, this.y, 5, dx/dis * this.bulletSpd, dy/dis * this.bulletSpd, true, 3, 'slimeBall'));
+                    }
+                }
+                render() {
+                    // ctx.fillStyle = 'red';
+                    // ctx.beginPath();
+                    // ctx.arc(this.x, this.y, this.r, 0, 2*Math.PI);
+                    // ctx.fill();
+                    // ctx.closePath();
+                    ctx.drawImage(img.blueSlime, 0, 0, 32, 32, this.x-this.r, this.y-this.r, this.r*2, this.r*2);
+                }
+                hit() {
+                    this.needDel = true;
+                    spawnTimer -= 20;
+
+                    killCount ++;
+                }
+            }
+
+            class BigEnemy { 
+                constructor(x, y) {
+                    this.x = x;
+                    this.y = y;
+                    this.r = 50;
+                    this.dest = {x: 0, y: 0};
+                    this.spd = 1 + Math.random();
+                    this.decideDest();
+                    this.frame = 0;
+                    this.needDel = false;
+                    this.bulletSpd = 2;
+                    this.isEnemy = true;
+                }
+                decideDest() {
+                    this.dest.x = Math.random() * (cw - this.r * 2) + this.r;
+                    this.dest.y = Math.random() * (ch - this.r * 2) + this.r;
+                }
+                tick() {
+                    this.frame++;
+                    if (Math.hypot(this.x - this.dest.x, this.y - this.dest.y) < 5) {
+                        this.decideDest();
+                    }
+                    let dx = this.dest.x - this.x;
+                    let dy = this.dest.y - this.y;
+                    let dis = Math.hypot(dx, dy);
+
+                    this.x += dx/dis * this.spd;
+                    this.y += dy/dis * this.spd;
+
+                    if (this.frame % 120 === 0) {
+                        let dx = pl.x - this.x;
+                        let dy = pl.y - this.y;
+                        let dis = Math.hypot(dx, dy);
+
+                        entities.push(new Bullet(this.x, this.y, 15, dx/dis * this.bulletSpd, dy/dis * this.bulletSpd, true, 10, 'slimeBall'));
+                    }
+                }
+                render() {
+                    // ctx.fillStyle = 'red';
+                    // ctx.beginPath();
+                    // ctx.arc(this.x, this.y, this.r, 0, 2*Math.PI);
+                    // ctx.fill();
+                    // ctx.closePath();
+                    ctx.drawImage(img.blueSlime, 0, 0, 32, 32, this.x-this.r, this.y-this.r, this.r*2, this.r*2);
+                }
+                hit() {
+                    this.needDel = true;
+                    spawnTimer -= 20;
+
+                    killCount ++;
+                }
+            }
+
+            class SplittingEnemy { 
+                constructor(x, y) {
+                    this.x = x;
+                    this.y = y;
+                    this.r = 30;
+                    this.dest = {x: 0, y: 0};
+                    this.spd = 1 + Math.random();
+                    this.decideDest();
+                    this.frame = 0;
+                    this.needDel = false;
+                    this.bulletSpd = 2;
+                    this.isEnemy = true;
+                }
+                decideDest() {
+                    this.dest.x = Math.random() * (cw - this.r * 2) + this.r;
+                    this.dest.y = Math.random() * (ch - this.r * 2) + this.r;
+                }
+                tick() {
+                    this.frame++;
+                    if (Math.hypot(this.x - this.dest.x, this.y - this.dest.y) < 5) {
+                        this.decideDest();
+                    }
+                    let dx = this.dest.x - this.x;
+                    let dy = this.dest.y - this.y;
+                    let dis = Math.hypot(dx, dy);
+
+                    this.x += dx/dis * this.spd;
+                    this.y += dy/dis * this.spd;
+
+                    if (this.frame % 120 === 0) {
+                        let dx = pl.x - this.x;
+                        let dy = pl.y - this.y;
+                        let dis = Math.hypot(dx, dy);
+
+                        entities.push(new Bullet(this.x, this.y, 10, dx/dis * this.bulletSpd, dy/dis * this.bulletSpd, true, 5, 'slimeBall'));
+                    }
+                }
+                render() {
+                    // ctx.fillStyle = 'blue';
+                    // ctx.beginPath();
+                    // ctx.arc(this.x, this.y, this.r, 0, 2*Math.PI);
+                    // ctx.fill();
+                    // ctx.closePath();
+                    ctx.drawImage(img.splitterSlime, 0, 0, 32, 32, this.x-this.r, this.y-this.r, this.r*2, this.r*2);
+                }
+                hit() {
+                    this.needDel = true;
+                    entities.push(new MovingEnemy(this.x, this.y));
+                    entities.push(new MovingEnemy(this.x, this.y));
+                    spawnTimer -= 10;
+
+                    killCount ++;
+                }
+            }
+
+            let poisonZones = [];
+
+            class PoisonEnemy { 
+                constructor(x, y) {
+                    this.x = x;
+                    this.y = y;
+                    this.r = 30;
+                    // this.dest = {x: 0, y: 0};
+                    this.spd = 1 + Math.random();
+                    // this.decideDest();
+                    this.frame = 0;
+                    this.needDel = false;
+                    this.bulletSpd = 2;
+                    this.isEnemy = true;
+                }
+                // decideDest() {
+                //     this.dest.x = Math.random() * (cw - this.r * 2) + this.r;
+                //     this.dest.y = Math.random() * (ch - this.r * 2) + this.r;
+                // }
+                tick() {
+                    this.frame++;
+                    // if (Math.hypot(this.x - this.dest.x, this.y - this.dest.y) < 5) {
+                    //     this.decideDest();
+                    // }
+                    let dx = pl.x - this.x;
+                    let dy = pl.y - this.y;
+                    let dis = Math.hypot(dx, dy);
+
+                    this.x += dx/dis * this.spd;
+                    this.y += dy/dis * this.spd;
+
+                    if (this.frame % 240 === 0) {
+                        poisonZones.push({x: this.x, y: this.y, r: 50, disappearTimer: 1200});
+                    }
+                }
+                render() {
+                    // ctx.fillStyle = 'purple';
+                    // ctx.beginPath();
+                    // ctx.arc(this.x, this.y, this.r, 0, 2*Math.PI);
+                    // ctx.fill();
+                    // ctx.closePath();
+                    ctx.drawImage(img.poisonSlime, 0, 0, 32, 32, this.x-this.r, this.y-this.r, this.r*2, this.r*2);
+                }
+                hit() {
+                    this.needDel = true;
+                    poisonZones.push({x: this.x, y: this.y, r: 80, disappearTimer: 1200});
+                    spawnTimer -= 20;
+
+                    killCount++;
+                }
+            }
+
+            let bossPresent = false;
+
+            class BossEnemy { 
+                constructor(x, y) {
+                    this.x = x;
+                    this.y = y;
+                    this.r = 50;
+                    this.dest = {x: 0, y: 0};
+                    this.spd = 4 + Math.random() * 2;
+                    this.decideDest();
+                    this.frame = 0;
+                    this.needDel = false;
+                    this.bulletSpd = 2;
+                    this.isEnemy = true;
+
+                    this.hp = 30;
+                    this.maxHp = 30;
+                    // entities = [];
+                    // bossSpawned();
+
+                    // console.log('boss')
+                    bossPresent = true;
+                }
+                decideDest() {
+                    this.dest.x = Math.random() * (cw - this.r * 2) + this.r;
+                    this.dest.y = Math.random() * (ch - this.r * 2) + this.r;
+                }
+                tick() {
+                    this.frame++;
+                    if (Math.hypot(this.x - this.dest.x, this.y - this.dest.y) < 5) {
+                        this.decideDest();
+                    }
+                    let dx = this.dest.x - this.x;
+                    let dy = this.dest.y - this.y;
+                    let dis = Math.hypot(dx, dy);
+
+                    this.x += dx/dis * this.spd;
+                    this.y += dy/dis * this.spd;
+
+                    // if (this.frame % 120 === 0) {
+                    //     let dx = pl.x - this.x;
+                    //     let dy = pl.y - this.y;
+                    //     let dis = Math.hypot(dx, dy);
+
+                    //     entities.push(new Bullet(this.x, this.y, 10, dx/dis * this.bulletSpd, dy/dis * this.bulletSpd, true, 3, 'slimeBall'));
+                    // }
+                }
+                render() {
+                    // ctx.fillStyle = 'red';
+                    // ctx.beginPath();
+                    // ctx.arc(this.x, this.y, this.r, 0, 2*Math.PI);
+                    // ctx.fill();
+                    // ctx.closePath();
+                    ctx.drawImage(img.blueSlime, 0, 0, 32, 32, this.x-this.r, this.y-this.r, this.r*2, this.r*2);
+
+                    ctx.fillStyle = 'red';
+                    ctx.fillRect(this.x - this.r - 5, this.y - this.r - 10, this.r * 2 + 10, 4);
+
+                    ctx.fillStyle = 'green';
+                    ctx.fillRect(this.x - this.r - 5, this.y - this.r - 10, (this.r*2 + 10) * this.hp / this.maxHp, 4);
+                }
+                hit(bullet) {
+                    // this.needDel = true;
+                    // spawnTimer -= 20;
+                    if (!bullet.broken && !bullet.hostile) {
+                        bullet.broken = true;
+                        this.hp -= bullet.dmg;
+
+                        pl.castable = false;
+
+
+
+                        setTimeout(()=>{pl.castable = true}, 5000);
+
+                        for (let x=0; x<15; x++) {
+                            let theta = x/10 * 2 * Math.PI;
+                            entities.push(new Bullet(this.x, this.y, 30, Math.cos(theta) * 3, Math.sin(theta) * 3, true, 15, 'slimeBall', true));
+                        }
+                    }
+                    if (this.hp <= 0) {
+                        this.needDel = true;
+                        bossPresent = false;
+                    }
+                }
+            }
+
+            let entities = [];
+
+            // entities.push(new MovingEnemy(200, 200));
+            // entities.push(new PoisonEnemy(300, 300));
+            // entities.push(new SplittingEnemy(400, 400));
+
+            // for (let x=0; x<10; x++) {
+            //     entities.push(new MovingEnemy(300+x*10, 300+x*10));
+            // }
+
+            let bullets = [];
+
+            let moveSpd = 5;
+
+            let history = [];
+            for (let x=0; x<10; x++) {
+                history.push(null);
+            }
+
+            let killCount = 0;
+
+            function spawn() {
+                // if (entities.length > 0) return;
+                if (bossPresent) return;
+                if ((Math.random()*200 >= killCount || killCount < 20)) {
+                    entities.push(new (((Math.random()*100) > rareChance) ? (Math.random() < 0.33 ? MovingEnemy : Math.random() < 0.5 ? SmallEnemy : BigEnemy) : (Math.random() > 0.3) ? SplittingEnemy : PoisonEnemy)(Math.random() * (cw-200) + 100, Math.random() * (ch-200) + 100));
+                    if (rareChance < 33) {
+                        rareChance += 2;
+                    }
+                }
+                else {
+                    entities = [];
+                    entities.push(new BossEnemy(Math.random() * (cw-200) + 100, Math.random() * (ch-200) + 100));
+
+                    killCount = 0;
+                }
+            }
+
+            // setInterval(spawn, 1000)
+
+            function collision(c1, c2) {
+                return Math.hypot(c1.x - c2.x, c1.y - c2.y) <= (c1.r + c2.r);
+            }
+
+            let gameOverScr = false;
+
+            function die() {
+                gameRunning = false;
+                gameOverScr = true;
+            }
+
+            function doMove() {
+                if (placedDivsName.includes('enlargeGuardian')) {
+                    pl.r = 23;
+                }
+                else {
+                    pl.r = 15;
+                }
+                if (!keys[' ']) {
+                    let dx = mousePos.x - pl.x;
+                    let dy = mousePos.y - pl.y;
+                    let dis = Math.hypot(dx, dy);
+
+                    // console.log(dx, dy);
+
+                    if (Math.abs(dx) > 1 && Math.abs(dy) > 1) {
+                        pl.x += dx/dis * moveSpd;
+                        pl.y += dy/dis * moveSpd;
+
+                        // console.log(mousePos);
+                        // console.log(dx, dy, dis)
+                    }
+
+                    // if (frame)
+
+                    history.push([pl.x, pl.y, pl.r]);
+                    history.shift();
+                }
+
+                let inPoison = false;
+                if (frame % 90 == 0) {
+                    poisonZones.forEach(x=>{
+                        if (collision(x, pl)) {
+                            inPoison = true;
+                        }
+                    })
+                    if (inPoison) {
+                        pl.hp -= 10;
+                    }
+                }
+
+                poisonZones.forEach(x=>{
+                    x.disappearTimer--;
+                })
+
+                poisonZones = poisonZones.filter(x=>x.disappearTimer > 0);
+
+                if (frame % 90 == 0 && !inPoison) {
+                    if (placedDivsName.includes('poisonGuardian')) {
+                        let t = null;
+                        placedDivs.forEach(x=>{
+                            if (x.type == 'poisonGuardian') {
+                                t = x;
+                            }
+                        })
+                        let dis = Math.hypot(pl.x-t.x, pl.y-t.y);
+                        if (dis < (pl.r + poisonGuardianRadius)) {
+                            pl.hp -= 10;
+                        }
+                    }
+                }
+
+                if (pl.hp <= 0) {
+                    die();
+                }
+            }
+
+            function tick() {
+                frame ++;
+                if (bulletcd > 0) {
+                    bulletcd--;
+                }
+                doMove();
+                entities = entities.filter(x=>!x.needDel);
+                entities.forEach(x=>{
+                    x.tick();
+                })
+                
+                if (placedDivsName.includes('poisonGuardian')) {
+                    if (frame % 240 == 0) {
+                        poisonZones.shift();
+                        console.log('removed poison')
+                    }
+                }
+
+                spawnTimer--;
+                if (spawnTimer <= 0) {
+                    spawn();
+                    spawnTimer = spawnTimerReset;
+                }
+
+                // if (frame % 1 == 0) {
+                //     entities.push(new MovingEnemy(Math.random() * 400 + 100, Math.random() * 400 + 100))
+                // }
+            }
+
+            let pauseBtns = false;
+            let currentDiv = 0;
+            let poisonGuardianRadius = 120;
+
+            // let placing = null;
+            let placingText = false;
+            let deletingText = false;
+
+            let calculatedEnd = false;
+            let endTime, totalDuration;
+            let showTutorial = true;
+
+            function render() {
+                ctx.clearRect(0, 0, cw, ch);
+                ctx.fillStyle = 'black';
+                ctx.fillRect(0, 0, cw, ch);
+
+                if (!gameOverScr) {
+                    if (showTutorial) {
+                        setTimeout(()=>{showTutorial = false}, 10000);
+                        ctx.fillStyle = 'white';
+                        ctx.font = '20px monospace';
+                        ctx.textAlign = 'left';
+                        ctx.fillText('Click to shoot at the mouse', 200, 50);
+                        ctx.fillText('Space to stop moving (while you shoot)', 200, 80);
+                        ctx.fillText('Press T to pause and place divinities', 200, 110);
+                    }
+                    entities.forEach(x=>{
+                        x.render();
+                    })
+
+                    poisonZones.forEach(x=>{
+                        // ctx.strokeStyle = 'purple';
+                        // ctx.lineWidth = '5px';
+                        // ctx.beginPath();
+                        // ctx.arc(x.x, x.y, x.r, 0, 2*Math.PI);
+                        // ctx.stroke();
+                        // ctx.closePath();
+                        ctx.globalAlpha = 0.3;
+                        ctx.drawImage(img.poisonZone, 0, 0, 32, 32, x.x-x.r, x.y-x.r, x.r*2, x.r*2);
+                        ctx.globalAlpha = 1;
+                    })
+
+                    history.forEach((x, i)=>{
+                        if (x) {
+                            ctx.beginPath();
+                            ctx.arc(x[0], x[1], x[2], 0, 2*Math.PI);
+                            ctx.fillStyle = '#FFFFFF' + (Math.round((i/9*241 + 16)).toString(16))
+                            // console.log('#FFFFFF' + (Math.round(((i/9*241 + 16)/255)**2).toString(16)))
+                            // console.log('#000000' + (Math.round(i/9*241 + 16).toString(16)))
+                            ctx.fill();
+                            ctx.closePath();
+                        }
+                    })
+
+                    if (placedDivsName.includes('poisonGuardian')) {
+                        let t = null;
+                        placedDivs.forEach(x=>{
+                            if (x.type == 'poisonGuardian') {
+                                t = x;
+                            }
+                        })
+                        ctx.globalAlpha = 0.3;
+                        ctx.drawImage(img.poisonZone, 0, 0, 32, 32, t.x-poisonGuardianRadius, t.y-poisonGuardianRadius, poisonGuardianRadius*2, poisonGuardianRadius*2);
+                        ctx.globalAlpha = 1;
+                    }
+
+                    ctx.fillStyle = 'red';
+                    ctx.fillRect(pl.x - pl.r - 5, pl.y - pl.r - 10, pl.r * 2 + 10, 4);
+
+                    ctx.fillStyle = 'green';
+                    ctx.fillRect(pl.x - pl.r - 5, pl.y - pl.r - 10, (pl.r*2 + 10) * pl.hp / pl.maxHp, 4);
+
+                    ctx.textAlign = 'left';
+                    ctx.font = '20px monospace';
+                    ctx.fillStyle = pl.hp/pl.maxHp > 1/3 ? 'green' : 'red';
+                    ctx.fillText(`${pl.hp}/${pl.maxHp}`, 20, 40);
+
+
+                    if (pauseBtns) {
+                        ctx.strokeStyle = 'white';
+                        ctx.strokeRect(80, 150, 100, 100);
+                        ctx.drawImage(img[divs[currentDiv]], 0, 0, 256, 256, 80, 150, 100, 100);
+
+                        ctx.fillStyle = 'white';
+                        ctx.fillRect(30, 180, 40, 40);
+                        ctx.fillRect(190, 180, 40, 40);
+
+                        ctx.font = '20px monospace';
+                        ctx.fillStyle = 'black';
+                        ctx.textAlign = 'right';
+                        ctx.fillText('<-', 65, 205);
+
+                        // ctx.font = '20px monospace';
+                        // ctx.fillStyle = 'black';
+                        ctx.textAlign = 'left';
+                        ctx.fillText('->', 195, 205);
+
+                        ctx.fillStyle = 'green';
+                        ctx.font = '20px monospace';
+                        ctx.fillText(`Blessing: ${divPros[currentDiv]}`, 80, 280);
+                        ctx.fillStyle = 'red'
+                        ctx.fillText(`Curse: ${divCons[currentDiv]}`, 80, 310);
+
+                        ctx.drawImage(img.deleteDiv, 0, 0, 256, 256, 65, 360, 50, 50);
+                        ctx.fillStyle = 'white';
+                        ctx.textAlign = 'left';
+                        ctx.font = '13px monospace';
+                        ctx.fillText('Delete divinity', 115, 390);
+
+                        ctx.fillStyle = 'white';
+                        ctx.font = '20px monospace';
+                        ctx.textAlign = 'left';
+                        ctx.fillText('Paused. Press esc to resume game.', 200, 50);
+                    }
+
+                    if (placingText) {
+                        ctx.fillStyle = 'white';
+                        ctx.font = '20px monospace';
+                        ctx.textAlign = 'left';
+                        ctx.fillText('Click somewhere to summon the divinity.', 200, 50);
+                        ctx.fillText('Press esc to exit placement mode.', 200, 80);
+                    }
+                    else if (deletingText) {
+                        ctx.fillStyle = 'white';
+                        ctx.font = '20px monospace';
+                        ctx.textAlign = 'left';
+                        ctx.fillText('Click a divinity to delete it.', 200, 50);
+                        ctx.fillText('Press esc to exit delete mode.', 200, 80);
+                    }
+
+                    placedDivs.forEach(x=>{
+                        ctx.drawImage(img[x.type], 0, 0, 256, 256, x.x - divSize, x.y - divSize, divSize*2, divSize*2);
+                    })
+                }
+                else {
+                    ctx.fillStyle = 'red';
+                    ctx.font = '70px monospace';
+                    ctx.textAlign = 'center'
+                    ctx.fillText('GAME OVER', cw/2, 200);
+                    if (!calculatedEnd) {
+                        endTime = Date.now();
+                        totalDuration = endTime - gameStart - cumulatedPauseTime;
+                        calculatedEnd = true;
+                    }
+                    ctx.font = '50px monospace';
+                    ctx.fillText(`You survived for: ${Math.floor(totalDuration/1000/60)}m ${Math.round(totalDuration/1000)%60}s`, cw/2, 300);
+                    ctx.font = '30px monospace';
+                    ctx.fillText('Click anywhere to restart.', cw/2, 370);
+                }
+            }
+
+            let previousTimeStamp = null;
+            let gameRunning = true;
+
+            function animate() {
+                if (gameRunning) {
+                    tick();
+                }
+                render();
+
+                // if (gameRunning) {
+                    requestAnimationFrame(animate);
+                // }
+            }
+
+            function pause() {
+                gameRunning = !gameRunning;
+                showTutorial = false;
+                if (gameRunning) {
+                    pauseEnd = Date.now();
+                    cumulatedPauseTime += pauseStart - pauseEnd;
+                    pauseStart = null;
+                    pauseEnd = null;
+                    pauseBtns = false;
+                    // animate();
+                }
+                else {
+                    pauseStart = Date.now();
+                    pauseBtns = true;
+                }
+            }
+
+            let keys = {};
+            let mousePos = {x: 200, y: 200};
+
+            document.body.addEventListener('keydown', e=>{
+                if (e.key == 't') {
+                    if (!placingText && !deletingText) {
+                        pause();
+                    }
+                }
+                else if (e.key == 'Escape') {
+                    if (pauseBtns) {
+                        // pauseBtns = false;
+                        // placingText = false;
+                        // deletingText = false;
+                        pause();
+                    }
+                    else {
+                        pauseBtns = true;
+                        placingText = false;
+                        deletingText = false;
+                    }
+                }
+                keys[e.key] = true;
+            })
+
+            document.body.addEventListener('keyup', e=>{
+                keys[e.key] = false;
+            })
+
+            cvs.addEventListener('mousemove', e=>{
+                mousePos.x = e.clientX - cvs.getBoundingClientRect().x;
+                mousePos.y = e.clientY - cvs.getBoundingClientRect().y;
+            })
+
+            let bulletcd = 5;
+            let bulletSpd = 5;
+
+            const divLimit = 6;
+
+            cvs.addEventListener('mousedown', e=>{
+                let x = e.clientX - cvs.getBoundingClientRect().x;
+                let y = e.clientY - cvs.getBoundingClientRect().y;
+                // console.log(x, y);
+
+                let dis = Math.hypot(pl.x - x, pl.y - y);
+
+                // console.log(gameOverScr, gameRunning);
+
+                // console.log('cast', x, y)
+                if (!gameOverScr && gameRunning) {
+                    if (bulletcd == 0) {
+                        entities.push(new Bullet(pl.x, pl.y, placedDivsName.includes('baseGuardian') ? 10 : placedDivsName.includes('enlargeGuardian') ? 25 : 15 , (x-pl.x)/dis * bulletSpd * (placedDivsName.includes('baseGuardian') ? 1.5 : 1), (y-pl.y)/dis * bulletSpd * (placedDivsName.includes('baseGuardian') ? 1.5 : 1), false, 5, 'energyCharge'));
+                        bulletcd = placedDivsName.includes('rageGuardian') ? 30 : 60;
+                    }
+                }
+                else if (gameOverScr) {
+                    gameRunning = false;
+                    reinit();
+                }
+                else if (pauseBtns) {
+                    if (x >= 30 && x <= 70 && y >= 180 && y <= 220) {
+                        currentDiv += divs.length - 1;
+                        currentDiv %= divs.length;
+                        render();
+                    }
+                    if (x >= 190 && x <= 230 && y >= 180 && y <= 220) {
+                        currentDiv ++;
+                        currentDiv %= divs.length;
+                        render();
+                    }
+                    if (x >= 80 && x <= 180 && y >= 150 && y <= 250) {
+                        // console.log('To place');
+                        pauseBtns = false;
+                        placingText = true;
+                        deletingText = false;
+                    }
+                    if (x >= 65 && x <= 115 && y >= 360 && y <= 410) {
+                        pauseBtns = false;
+                        deletingText = true;
+                        placingText = false;
+                    }
+                }
+                else if (placingText) {
+                    if (placedDivs.length < divLimit) {
+                        if (!placedDivsName.includes(divs[currentDiv])) {
+                            placedDivs.push({x: x, y: y, type: divs[currentDiv]});
+                            placedDivsName.push(divs[currentDiv]);
+                        }
+                    }
+                }
+                else if (deletingText) {
+                    placedDivs = placedDivs.filter(d=>Math.hypot(x - d.x, y - d.y) > divSize);
+                    placedDivsName = [];
+                    placedDivs.forEach(x=>{
+                        placedDivsName.push(x.type);
+                    })
+                }
+            })
+
+            let gameStart = Date.now();
+            let pauseStart = null;
+            let pauseEnd = null;
+            let cumulatedPauseTime = 0;
+            // animate();
+
+            function reinit() {
+                bulletcd = 5;
+                bulletSpd = 5;
+
+                gameStart = Date.now();
+                pauseStart = null;
+                pauseEnd = null;
+                cumulatedPauseTime = 0;
+                
+                gameRunning = true;
+                gameOverScr = false;
+
+                poisonZones = [];
+                entities = [];
+                bullets = [];
+
+                history = [];
+                for (let x=0; x<10; x++) {
+                    history.push(null);
+                }
+
+                pl = {
+                    x: 100,
+                    y: 100,
+                    r: 15,
+                    hp: 100,
+                    maxHp: 100
+                }
+
+                frame = 0;
+
+                placedDivs = [];
+                placedDivsName = [];
+
+                calculatedEnd = false;
+
+                bossPresent = false;
+                killCount = false;
+
+                // animate();
+
+            }
+
+            // init();
+        </script>
+    </body>
+</html>
